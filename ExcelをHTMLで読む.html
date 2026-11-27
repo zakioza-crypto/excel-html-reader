@@ -576,9 +576,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 <div class="wrap">
 
   <header class="hero">
-    <span class="hero-tag"><span class="dot"></span>EXCEL → HTML リーダー</span>
-    <h1>Excelの表を、<span class="hl">読み物</span>として開く。</h1>
-    <p>セルだらけの資料をそのまま眺めるのは疲れます。ファイルを放り込むだけで、見出し・検索・並び替えの効いた、ブラウザで読みやすい文書に変換します。横に長い表は、キー列の固定・列の絞り込み・転置表示で、横スクロールなしに読めます。</p>
+    <span class="hero-tag"><span class="dot"></span>EXCEL / CSV / JSON → HTML リーダー</span>
+    <h1>表データを、<span class="hl">読み物</span>として開く。</h1>
+    <p>セルだらけの資料をそのまま眺めるのは疲れます。Excel / CSV / JSON ファイルを放り込むだけで、見出し・検索・並び替えの効いた、ブラウザで読みやすい文書に変換します。横に長い表は、キー列の固定・列の絞り込み・転置表示で、横スクロールなしに読めます。</p>
     <div class="hero-steps">
       <span><b>1</b> ファイルをドロップ</span>
       <span><b>2</b> シートを選ぶ</span>
@@ -592,8 +592,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <div class="dz-icon" aria-hidden="true">
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5M8 9h2"/></svg>
     </div>
-    <p class="dz-title">ここにExcelファイルをドロップ</p>
-    <p class="dz-sub">ファイルはこのブラウザの中だけで読み込まれます。どこにも送信されません。</p>
+    <p class="dz-title">ここに Excel / CSV / JSON ファイルをドロップ</p>
+    <p class="dz-sub">ファイルはこのブラウザの中だけで読み込まれます。どこにも送信されません。CSV / TSV は UTF-8 と Shift_JIS に自動対応、JSON は「オブジェクトの配列」形式に対応します。</p>
     <div class="dz-actions">
       <button class="btn btn-primary" id="pickBtn" type="button">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
@@ -601,9 +601,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       </button>
       <button class="btn btn-ghost" id="sampleBtn" type="button">サンプルで試す</button>
     </div>
-    <p class="dz-formats">対応形式 <code>.xlsx</code><code>.xls</code><code>.csv</code><code>.tsv</code><code>.ods</code></p>
+    <p class="dz-formats">対応形式 <code>.xlsx</code><code>.xls</code><code>.csv</code><code>.tsv</code><code>.json</code><code>.ods</code></p>
     <div class="error-box" id="errorBox" role="alert"></div>
-    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.tsv,.ods,.xlsm,.xlsb" hidden>
+    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.tsv,.json,.ods,.xlsm,.xlsb" hidden>
   </section>
 
   <!-- File bar -->
@@ -836,14 +836,177 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return (n/(1024*1024)).toFixed(2) + " MB";
   }
 
+  function getExt(name){
+    var m = String(name || "").toLowerCase().match(/\.([a-z0-9]+)$/);
+    return m ? m[1] : "";
+  }
+  function baseSheetName(name){
+    var s = String(name || "データ").replace(/\.[^.]+$/, "").trim();
+    return s || "データ";
+  }
+  // 文字コード自動判定：UTF-8(BOM含む)を厳密に試し、失敗したら Shift_JIS で読む
+  function decodeText(buffer){
+    var bytes = new Uint8Array(buffer);
+    if(bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF){
+      return new TextDecoder("utf-8").decode(buffer);
+    }
+    try{
+      return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+    }catch(e){
+      try{
+        return new TextDecoder("shift_jis", { fatal: true }).decode(buffer);
+      }catch(e2){
+        return new TextDecoder("shift_jis").decode(buffer);
+      }
+    }
+  }
+  function normalizeGrid(grid){
+    var width = 0;
+    grid.forEach(function(r){ if(r && r.length > width) width = r.length; });
+    return grid.map(function(r){
+      var out = [];
+      for(var i = 0; i < width; i++){ out.push(r && r[i] != null ? String(r[i]).trim() : ""); }
+      return out;
+    }).filter(function(r){ return r.some(function(c){ return c !== ""; }); });
+  }
+  // CSV / TSV パーサ（引用符・引用符内の改行・"" エスケープ・CRLF に対応）
+  function parseDelimited(text, delimiter){
+    if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    var rows = [], curRow = [], cur = "", inQuotes = false;
+    for(var i = 0; i < text.length; i++){
+      var ch = text[i];
+      if(inQuotes){
+        if(ch === '"'){
+          if(text[i + 1] === '"'){ cur += '"'; i++; }
+          else inQuotes = false;
+        }else{ cur += ch; }
+      }else{
+        if(ch === '"' && cur === ""){ inQuotes = true; }
+        else if(ch === delimiter){ curRow.push(cur); cur = ""; }
+        else if(ch === "\r"){
+          if(text[i + 1] === "\n") i++;
+          curRow.push(cur); cur = ""; rows.push(curRow); curRow = [];
+        }
+        else if(ch === "\n"){ curRow.push(cur); cur = ""; rows.push(curRow); curRow = []; }
+        else{ cur += ch; }
+      }
+    }
+    if(inQuotes || cur !== "" || curRow.length){ curRow.push(cur); rows.push(curRow); }
+    return rows;
+  }
+  // JSON（オブジェクトの配列）→ グリッド。ネストした値は JSON 文字列にする
+  function jsonToGrid(data){
+    if(!Array.isArray(data)){
+      var err = new Error("not-array"); err.code = "not-array"; throw err;
+    }
+    if(!data.length){
+      var err2 = new Error("empty-json"); err2.code = "empty-json"; throw err2;
+    }
+    for(var i = 0; i < data.length; i++){
+      var el = data[i];
+      if(el === null || typeof el !== "object" || Array.isArray(el)){
+        var err3 = new Error("not-object-array"); err3.code = "not-object-array"; throw err3;
+      }
+    }
+    var keys = [], seen = {};
+    data.forEach(function(obj){
+      Object.keys(obj).forEach(function(k){ if(!seen[k]){ seen[k] = true; keys.push(k); } });
+    });
+    if(!keys.length){
+      var err4 = new Error("no-keys"); err4.code = "no-keys"; throw err4;
+    }
+    var grid = [keys.slice()];
+    data.forEach(function(obj){
+      grid.push(keys.map(function(k){
+        var v = obj[k];
+        if(v === null || v === undefined) return "";
+        if(typeof v === "object") return JSON.stringify(v);
+        return String(v);
+      }));
+    });
+    return grid;
+  }
+  function finishLoad(file, sheets){
+    state.fileName = file.name;
+    state.fileSize = file.size;
+    state.sheets = sheets;
+    state.active = 0;
+    state.headerRow = 1;
+    state.query = ""; $("searchInput").value = "";
+    state.overviewOpen = true;
+    resetViewState();
+    renderAll();
+  }
   function loadFile(file){
     hideError();
     if(!file) return;
+    var ext = getExt(file.name);
+    var reader = new FileReader();
+    reader.onerror = function(){
+      showError("ファイルの読み取りに失敗しました。", "もう一度ファイルを選んでください。");
+    };
+    // --- JSON ---
+    if(ext === "json"){
+      reader.onload = function(e){
+        try{
+          var text = decodeText(e.target.result);
+          var data;
+          try{ data = JSON.parse(text); }
+          catch(pe){
+            showError("JSONの形式が正しくありませんでした。", "ファイルの内容が JSON として読み取れませんでした。括弧やカンマの不足など、書式を確認してください。");
+            return;
+          }
+          var grid;
+          try{ grid = jsonToGrid(data); }
+          catch(je){
+            if(je && (je.code === "not-array" || je.code === "not-object-array")){
+              showError("このJSONは読み込めませんでした。", "対応しているのは「オブジェクトの配列」形式だけです（例：[{\"名前\":\"…\",\"値\":123}, …]）。各要素が1行になり、キーが列名になります。配列でないJSONや、要素がオブジェクトでないJSONは読み込めません。");
+            }else if(je && je.code === "empty-json"){
+              showError("JSONにデータがありませんでした。", "空の配列（[]）のため、表にできる行がありません。オブジェクトを1件以上含む配列にしてください。");
+            }else if(je && je.code === "no-keys"){
+              showError("JSONから列を作れませんでした。", "オブジェクトにキーが1つもありません。キーが列名になるため、キーを持つオブジェクトの配列にしてください。");
+            }else{
+              showError("このJSONは読み込めませんでした。", "「オブジェクトの配列」形式かを確認してください。");
+            }
+            return;
+          }
+          var rows = normalizeGrid(grid);
+          if(!rows.length){ showError("JSONにデータがありませんでした。", "表にできる行が見つかりませんでした。"); return; }
+          finishLoad(file, [{ name: baseSheetName(file.name), rows: rows }]);
+        }catch(err){
+          showError("このファイルは読み込めませんでした。", "JSONファイルが壊れていないか確認してください。");
+        }
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+    // --- CSV / TSV ---
+    if(ext === "csv" || ext === "tsv"){
+      reader.onload = function(e){
+        try{
+          var text = decodeText(e.target.result);
+          var delimiter = ext === "tsv" ? "\t" : ",";
+          // .csv でもタブ区切りの実ファイルがあるため、先頭行で判定する補助
+          if(ext === "csv"){
+            var firstLine = text.slice(0, text.search(/\r?\n/) > 0 ? text.search(/\r?\n/) : 2000);
+            if(firstLine.indexOf("\t") !== -1 && firstLine.indexOf(",") === -1) delimiter = "\t";
+          }
+          var grid = parseDelimited(text, delimiter);
+          var rows = normalizeGrid(grid);
+          if(!rows.length) throw new Error("empty");
+          finishLoad(file, [{ name: baseSheetName(file.name), rows: rows }]);
+        }catch(err){
+          showError("このファイルは読み込めませんでした。", "CSV / TSV ファイルが壊れていないか、文字コード（UTF-8 / Shift_JIS）を確認してください。");
+        }
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+    // --- Excel / ODS など（SheetJS） ---
     if(typeof XLSX === "undefined"){
       showError("読み込みライブラリを読み込めませんでした。", "通信環境を確認して、ページを開き直してください。");
       return;
     }
-    var reader = new FileReader();
     reader.onload = function(e){
       try{
         var wb = XLSX.read(e.target.result, { type: "array", cellDates: true });
@@ -851,32 +1014,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         var sheets = wb.SheetNames.map(function(name){
           var ws = wb.Sheets[name];
           var grid = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false, blankrows: false });
-          // trim fully-empty trailing columns per row width detection
-          var width = 0;
-          grid.forEach(function(r){ if(r.length > width) width = r.length; });
-          grid = grid.map(function(r){
-            var out = [];
-            for(var i=0;i<width;i++){ out.push(r[i] == null ? "" : String(r[i]).trim()); }
-            return out;
-          }).filter(function(r){ return r.some(function(c){ return c !== ""; }); });
-          return { name: name, rows: grid };
+          return { name: name, rows: normalizeGrid(grid) };
         }).filter(function(s){ return s.rows.length > 0; });
         if(!sheets.length) throw new Error("empty");
-        state.fileName = file.name;
-        state.fileSize = file.size;
-        state.sheets = sheets;
-        state.active = 0;
-        state.headerRow = 1;
-        state.query = ""; $("searchInput").value = "";
-        state.overviewOpen = true;   // 開いた直後は概要ダッシュボードから見せる
-        resetViewState();
-        renderAll();
+        finishLoad(file, sheets);
       }catch(err){
-        showError("このファイルは読み込めませんでした。", "対応形式は .xlsx / .xls / .csv / .tsv / .ods です。ファイルが壊れていないか、パスワード付きでないか確認してください。");
+        showError("このファイルは読み込めませんでした。", "対応形式は .xlsx / .xls / .csv / .tsv / .json / .ods です。ファイルが壊れていないか、パスワード付きでないか確認してください。");
       }
-    };
-    reader.onerror = function(){
-      showError("ファイルの読み取りに失敗しました。", "もう一度ファイルを選んでください。");
     };
     reader.readAsArrayBuffer(file);
   }

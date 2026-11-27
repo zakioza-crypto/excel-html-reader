@@ -7,6 +7,13 @@ Web版「ExcelをHTMLで読むツール」の概要ダッシュボードと同�
 
 使い方:
     python3 profile_table.py input.xlsx [--format json|html] [--out FILE]
+    python3 profile_table.py 資料1.xlsx 資料2.csv ... [--format json|html] [--out FILE]
+    python3 profile_table.py 資料フォルダ/ [--format json|html] [--out FILE]
+
+複数ファイル（またはフォルダ）の場合は、全ファイル分のプロファイルをまとめた
+1つのJSON/HTMLを出力する。1ファイルだけの場合は従来どおり、そのファイル
+1件分のプロファイルだけを出力する。読めないファイルが混ざっていても、
+そのファイルは error 付きで記録して残りの処理を続ける。
 
 依存: xlsx の読み込みに openpyxl が必要（csv/tsv/json は標準ライブラリのみ）。
 """
@@ -22,6 +29,8 @@ import sys
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
+
+SUPPORTED_SUFFIXES = {".xlsx", ".csv", ".tsv", ".json"}
 
 
 # ---------- 読み込み ----------
@@ -43,7 +52,10 @@ def _load_xlsx(path: Path) -> list[dict]:
         from openpyxl import load_workbook
     except ImportError:
         raise RuntimeError("xlsxの読み込みには openpyxl が必要です: pip install openpyxl")
-    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+    except Exception as e:
+        raise ValueError(f"xlsxファイルを開けませんでした（壊れているか、未対応の形式です）: {e}") from e
     tables = []
     for ws in wb.worksheets:
         rows = [list(r) for r in ws.iter_rows(values_only=True)]
@@ -222,6 +234,101 @@ def profile_file(path: str | Path) -> dict:
     return {"file": path.name, "sheets": [profile_table(t) for t in tables]}
 
 
+# ---------- 複数ファイル ----------
+
+def expand_inputs(inputs: list[str | Path]) -> list[Path]:
+    """入力指定をファイル一覧に展開する。フォルダは対応形式のファイルを名前順に拾う。"""
+    files: list[Path] = []
+    for raw in inputs:
+        path = Path(raw)
+        if path.is_dir():
+            files.extend(sorted(p for p in path.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES))
+        else:
+            files.append(path)
+    return files
+
+
+def summarize_profiles(profiles: list[dict]) -> dict:
+    """複数ファイル分のプロファイルの合計サマリ。error 付きの項目は件数だけ数える。"""
+    ok = [p for p in profiles if "error" not in p]
+    total_warnings = {"blank_cells": 0, "duplicate_rows": 0, "minority_type_cells": 0, "outliers": 0}
+    total_rows = 0
+    total_sheets = 0
+    for p in ok:
+        total_sheets += len(p["sheets"])
+        for sheet in p["sheets"]:
+            total_rows += sheet["row_count"]
+            for k in total_warnings:
+                total_warnings[k] += sheet["warnings"].get(k, 0)
+    return {
+        "file_count": len(profiles),
+        "ok_count": len(ok),
+        "error_count": len(profiles) - len(ok),
+        "total_sheets": total_sheets,
+        "total_rows": total_rows,
+        "total_warnings": total_warnings,
+    }
+
+
+def profile_files(paths: list[str | Path]) -> list[dict]:
+    """複数ファイルをプロファイル化する。読めないファイルは error 付きで残す。"""
+    profiles: list[dict] = []
+    for raw in paths:
+        path = Path(raw)
+        try:
+            profiles.append(profile_file(path))
+        except Exception as e:  # openpyxlのBadZipFileなど、読み込み系の例外は種類を問わず記録する
+            profiles.append({"file": path.name, "error": str(e)})
+    return profiles
+
+
+def render_combined_html(profiles: list[dict], summary: dict) -> str:
+    """複数ファイル分のプロファイルを1つのHTML（一覧＋各ファイルの詳細）にまとめる。"""
+    w = summary["total_warnings"]
+    parts = [
+        "<!DOCTYPE html><html lang='ja'><head><meta charset='utf-8'>",
+        "<title>プロファイル（一括）</title>",
+        "<style>body{font-family:sans-serif;margin:2em;line-height:1.6}"
+        "table{border-collapse:collapse;margin:1em 0}th,td{border:1px solid #ccc;padding:4px 8px}"
+        ".warn{color:#b00;font-weight:bold}.err{color:#b00}</style></head><body>",
+        "<h1>プロファイル（一括）</h1>",
+        f"<p>対象 {summary['file_count']} 件（成功 {summary['ok_count']} 件 / 失敗 {summary['error_count']} 件）・"
+        f"合計 {summary['total_sheets']} シート / {summary['total_rows']} 行</p>",
+        "<p>要注意（合計）: 空欄セル <span class='warn'>%d</span> 件 / 重複行 <span class='warn'>%d</span> 件"
+        " / 型混在の少数派セル <span class='warn'>%d</span> 件 / 外れ値 <span class='warn'>%d</span> 件</p>"
+        % (w["blank_cells"], w["duplicate_rows"], w["minority_type_cells"], w["outliers"]),
+        "<h2>ファイル一覧</h2><table><tr><th>ファイル</th><th>シート数</th><th>行数</th>"
+        "<th>空欄</th><th>重複行</th><th>型混在</th><th>外れ値</th></tr>",
+    ]
+    for p in profiles:
+        if "error" in p:
+            parts.append(
+                "<tr><td>%s</td><td colspan='6' class='err'>読めませんでした: %s</td></tr>"
+                % (html.escape(p["file"]), html.escape(p["error"]))
+            )
+            continue
+        rows = sum(s["row_count"] for s in p["sheets"])
+        warns = {k: sum(s["warnings"].get(k, 0) for s in p["sheets"]) for k in w}
+        parts.append(
+            "<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td></tr>"
+            % (
+                html.escape(p["file"]), len(p["sheets"]), rows,
+                warns["blank_cells"], warns["duplicate_rows"],
+                warns["minority_type_cells"], warns["outliers"],
+            )
+        )
+    parts.append("</table>")
+    for p in profiles:
+        if "error" in p:
+            continue
+        # 既存の単体HTMLから body 部分だけ取り出して1ファイル分として埋め込む
+        single = render_html(p)
+        body = single.split("<body>", 1)[1].rsplit("</body>", 1)[0]
+        parts.append(body)
+    parts.append("</body></html>")
+    return "\n".join(parts)
+
+
 # ---------- HTML出力 ----------
 
 def render_html(profile: dict) -> str:
@@ -260,18 +367,43 @@ def render_html(profile: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="表データのプロファイルを作成します")
-    ap.add_argument("input", help="入力ファイル（xlsx / csv / tsv / json）")
+    ap.add_argument("input", nargs="+", help="入力ファイル（xlsx / csv / tsv / json）またはフォルダ。複数指定可")
     ap.add_argument("--format", choices=("json", "html"), default="json")
     ap.add_argument("--out", help="出力先ファイル（省略時は標準出力）")
     args = ap.parse_args(argv)
 
-    profile = profile_file(args.input)
-    text = json.dumps(profile, ensure_ascii=False, indent=2) if args.format == "json" else render_html(profile)
+    files = expand_inputs(args.input)
+    if not files:
+        print("対応するファイルが見つかりませんでした（xlsx / csv / tsv / json）", file=sys.stderr)
+        return 1
+    profiles = profile_files(files)
+    if len(profiles) == 1 and "error" not in profiles[0]:
+        profile = profiles[0]
+        text = json.dumps(profile, ensure_ascii=False, indent=2) if args.format == "json" else render_html(profile)
+    else:
+        summary = summarize_profiles(profiles)
+        if args.format == "json":
+            text = json.dumps({"files": profiles, "summary": summary}, ensure_ascii=False, indent=2)
+        else:
+            text = render_combined_html(profiles, summary)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
         print(f"書き出しました: {args.out}", file=sys.stderr)
     else:
-        print(text)
+        try:
+            print(text)
+            sys.stdout.flush()
+        except BrokenPipeError:
+            # パイプの読み手が先に閉じた場合（例: | head）は静かに終了する
+            try:
+                sys.stdout.close()
+            except Exception:
+                pass
+            return 0
+    if all("error" in p for p in profiles):
+        for p in profiles:
+            print(f"読めませんでした: {p['file']}: {p['error']}", file=sys.stderr)
+        return 1
     return 0
 
 

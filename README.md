@@ -26,8 +26,9 @@ HTMLファイルをブラウザで開き、表データのファイルを画面�
 - 画像・テキストボックス・図形の表示（埋め込み画像のサムネイル一覧と拡大表示、テキストボックスの本文抽出、配置セルのマーカー表示）
 - 音声読み上げ（Web Speech API）
 - HTML・CSVへの書き出し
+- 概要プロファイルのJSON書き出し（Python CLI版と同一構造で、結果を共有できます）
 
-対応形式: .xlsx / .csv / .tsv（文字コードは UTF-8 / Shift_JIS を自動判定）/ .json（オブジェクトの配列形式）
+対応形式: .xlsx / .csv / .tsv（文字コードは UTF-8 / Shift_JIS を自動判定、区切り文字はカンマ／セミコロン／タブを内容から自動判定）/ .json（オブジェクトの配列形式）
 
 ## Python CLI版
 
@@ -35,7 +36,13 @@ HTMLファイルをブラウザで開き、表データのファイルを画面�
 pip install openpyxl   # xlsxを読む場合のみ（csv/tsv/jsonは標準ライブラリのみ）
 python3 python/profile_table.py 資料.xlsx                 # JSONで出力
 python3 python/profile_table.py 資料.csv --format html --out profile.html
+
+# 一括（複数ファイル／フォルダ）：合計サマリ付きの1つのJSON/HTMLを出力
+python3 python/profile_table.py 資料1.xlsx 資料2.csv --out batch.json
+python3 python/profile_table.py 資料フォルダ/ --format html --out batch.html
 ```
+
+一括では、読めないファイルが混ざっていてもそのファイルは error 付きで記録して残りの処理を続ける（全件読めなかった場合のみ終了コード1）。
 
 ## バックエンド版
 
@@ -46,7 +53,9 @@ python3 app.py   # http://127.0.0.1:5000
 ```
 
 - `GET /` : 動作確認用のアップロードページ
+- `GET /api/health` : 死活確認（`{"status": "ok"}` を返します）
 - `POST /api/profile` : multipart/form-data（フィールド名 `file`）でファイルを受け取り、プロファイルJSONを返します
+- `POST /api/profiles` : multipart/form-data（フィールド名 `files`、複数可）で複数ファイルを受け取り、`{"files": [...], "summary": {...}}` を返します。読めないファイルはエラーとして記録し、残りの処理を続けます
 
 ## 注意
 

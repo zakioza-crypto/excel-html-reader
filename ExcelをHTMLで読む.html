@@ -1496,7 +1496,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if(!body.length) return;
       var attn = collectAttention(headers, body);
       out.blank += attn.empty.length;
-      out.dup += attn.dup.length;
+      out.dup += attn.dupExtra;
       out.mixed += attn.mixed.length;
       out.outlier += attn.outlier.length;
     });
@@ -1761,6 +1761,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   // 完全に同じ内容の重複行：body の添字の集合とグループ数を返す
+  // 「重複行」の件数は、Python版CLI・JSON書き出しと共通の定義＝余分な行の数
+  // （全行数 − 重複を除いた行数）で数える。rowCount は重複グループに属する
+  // 行の総数で、ハイライトや移動先の判定にだけ使う。
   function analyzeDuplicates(body){
     var groups = {};
     body.forEach(function(r, i){
@@ -1776,7 +1779,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         groups[k].forEach(function(i){ dupSet[i] = true; });
       }
     });
-    return { dupSet: dupSet, groupCount: groupCount, rowCount: rowCount };
+    return { dupSet: dupSet, groupCount: groupCount, rowCount: rowCount, extraCount: rowCount - groupCount };
   }
 
   // 現在のシートに対するチェック結果一式
@@ -1910,7 +1913,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     });
     function byRowCol(a, b){ return (a.orig - b.orig) || (a.ci - b.ci); }
     empty.sort(byRowCol); mixed.sort(byRowCol); outlier.sort(byRowCol);
-    return { empty: empty, dup: dupList, mixed: mixed, outlier: outlier, dupGroups: dup.groupCount };
+    return { empty: empty, dup: dupList, dupExtra: dup.extraCount, mixed: mixed, outlier: outlier, dupGroups: dup.groupCount };
   }
 
   var ATTN_DEFS = [
@@ -2079,7 +2082,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     grid.innerHTML = "";
     ATTN_DEFS.forEach(function(def){
       var items = attn[def.key];
-      var count = items.length;
+      // 「重複した行」のカードの件数は余分な行の数（dupExtra）で表示する。
+      // items（dup の一覧）は重複グループに属する行すべてで、押したときの
+      // 移動先としてはそのまま使う。
+      var count = def.key === "dup" ? attn.dupExtra : items.length;
       var card = document.createElement("button");
       card.type = "button";
       card.className = "attn-card" + (count === 0 ? " is-zero" : "") + (attnNav.type === def.key ? " active" : "");
@@ -2595,7 +2601,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       return el;
     }
     sumItem("重複グループ", dup.groupCount.toLocaleString("ja-JP") + " 件", dup.groupCount > 0);
-    sumItem("重複行", dup.rowCount.toLocaleString("ja-JP") + " 行", dup.rowCount > 0);
+    sumItem("重複行", dup.extraCount.toLocaleString("ja-JP") + " 行", dup.extraCount > 0);
     sumItem("空欄セル合計", totalEmpty.toLocaleString("ja-JP") + " 件", totalEmpty > 0);
     sumItem("型が混在する列", mixedCount.toLocaleString("ja-JP") + " 列", mixedCount > 0);
 
